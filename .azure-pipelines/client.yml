@@ -3,7 +3,7 @@
 # AzConfigConnectionString - The connection string used for testing the AzConfig service. This is set in the pipeline web ui as it needs different values for public vs internal.
 
 trigger:
-- master
+  - master
 
 variables:
   DotNetCoreVersion: '2.1.503'
@@ -25,8 +25,13 @@ jobs:
         inputs:
           command: pack
           packagesToPack: '$(ProjectFile)'
+        env:
+          DOTNET_SKIP_FIRST_TIME_EXPERIENCE: 1
+          DOTNET_CLI_TELEMETRY_OPTOUT: 1
+          DOTNET_MULTILEVEL_LOOKUP: 0
 
       - task: PublishBuildArtifacts@1
+        condition: succeededOrFailed()
         displayName: 'Publish Artifacts'
         inputs:
           ArtifactName: packages
@@ -34,12 +39,19 @@ jobs:
   - job: 'Analyze'
 
     dependsOn:
-      'Build'
+      - 'Build'
 
     pool:
       vmImage: 'vs2017-win2016'
 
     steps:
+      - task: DownloadBuildArtifacts@0
+        displayName: 'Download Build Artifacts'
+        condition: and(succeededOrFailed(), ne(variables['Build.Reason'],'PullRequest'))
+        inputs:
+          artifactName: packages
+          downloadPath: $(System.DefaultWorkingDirectory)
+
       - task: ms.vss-governance-buildtask.governance-build-task-component-detection.ComponentGovernanceComponentDetection@0
         displayName: 'Component Detection'
         # ComponentGovernance is currently unable to run on pull requests of public projects.  Running on
@@ -51,10 +63,13 @@ jobs:
     strategy:
       matrix:
         Linux:
+          OSName: 'Linux'
           OSVmImage: 'ubuntu-16.04'
         Windows:
+          OSName: 'Windows'
           OSVmImage: 'vs2017-win2016'
         MacOs:
+          OSName: 'MacOS'
           OSVmImage: 'macOS-10.13'
 
     pool:
@@ -76,8 +91,9 @@ jobs:
         inputs:
           command: test
           projects: '$(ProjectFile)'
-          arguments: --filter TestCategory!=Live
-        
+          arguments: --filter TestCategory!=Live --logger trx
+          publishTestResults: false
+
       - task: DotNetCoreCLI@2
         displayName: 'Build & Test (with live tests)'
         condition: ne(variables['System.TeamProject'], 'public')
@@ -89,3 +105,13 @@ jobs:
         inputs:
           command: test
           projects: '$(ProjectFile)'
+          arguments: --logger trx
+          publishTestResults: false
+
+      - task: PublishTestResults@2
+        condition: succeededOrFailed()
+        inputs:
+          testResultsFiles: '**/*.trx'
+          testRunTitle: '$(OSName) DotNet $(DotNetCoreVersion)'
+          testResultsFormat: 'VSTest'
+          mergeTestResults: true

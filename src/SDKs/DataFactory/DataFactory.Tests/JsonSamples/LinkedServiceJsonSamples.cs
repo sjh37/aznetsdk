@@ -1860,6 +1860,11 @@ namespace DataFactory.Tests.JsonSamples
             newClusterVersion: ""3.4.x-scala2.11"",
             newClusterNumOfWorker: ""1"",
             newClusterNodeType: ""Standard_DS3_v2"",
+            newClusterDriverNodeType: ""Standard_DS3_v2"",
+            newClusterInitScripts: [
+                ""someScript""
+            ],
+            newClusterEnableElasticDisk: true,
             newClusterSparkConf: {
                 ""spark.speculation"": true
             }
@@ -1987,6 +1992,43 @@ namespace DataFactory.Tests.JsonSamples
             password : {
                 type : ""SecureString"",
                 value : ""some password""
+            }
+        }
+    }
+}";
+
+        [JsonSample]
+        public const string SapOpenHubLinkedService = @"
+{
+    ""name"": ""SapBwOpenHubLinkedService"",
+    ""properties"": {
+        ""type"": ""SapOpenHub"",
+        ""typeProperties"": {
+            ""server"": ""fakeserver"",
+            ""systemNumber"": ""00"",
+            ""clientId"": ""800"",
+            ""userName"": ""fakeusr"",
+            ""password"": {
+                ""type"": ""SecureString"",
+                ""value"": ""fakepsw""
+            }
+        }
+    }
+}";
+
+        [JsonSample]
+        public const string RestLinkedService = @"
+{
+    ""name"": ""RESTLinkedService"",
+    ""properties"": {
+        ""type"": ""RestService"",
+        ""typeProperties"": {
+            ""authenticationType"": ""Basic"",
+            ""url"" : ""https://fakeurl/"",
+            ""userName"": ""fakeusr"",
+            ""password"": {
+                ""type"": ""SecureString"",
+                ""value"": ""fakepsw""
             }
         }
     }
