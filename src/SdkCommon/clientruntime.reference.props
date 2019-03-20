@@ -1,8 +1,11 @@
 <Project ToolsVersion="15.0" xmlns="http://schemas.microsoft.com/developer/msbuild/2003">
-	<Import Project="$([MSBuild]::GetPathOfFileAbove('AzSdk.props'))" />	
+	<!-- <Import Project="$([MSBuild]::GetPathOfFileAbove('AzSdk.props'))" />	 -->
 	<ItemGroup>
 		<PackageReference Include="Microsoft.Rest.ClientRuntime" Version="[2.3.19, 3.0.0)" />		
 	</ItemGroup>
+	<PropertyGroup>
+		<TargetFrameworks>net452;net461;netstandard1.4;netstandard2.0</TargetFrameworks>
+	</PropertyGroup>
   
 	<ItemGroup Condition=" '$(TargetFramework)' == 'net452' ">
     <Reference Include="System.Net" />
