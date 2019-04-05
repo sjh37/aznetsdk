@@ -17,7 +17,7 @@ steps:
   - task: MSBuild@1
     inputs:
       solution: build.proj
-      msbuildArguments: /t:RunTests /clp:ShowTimestamp /flp:Summary;Verbosity=minimal;LogFile=msbuild.sum /flp1:warningsonly;logfile=msbuild.wrn /flp2:errorsonly;logfile=msbuild.err /p:Scope="Compute" 
+      msbuildArguments: /t:RunTests /p:Scope=Compute
   - task: PublishBuildArtifacts@1
     inputs:
       pathtoPublish: TestResults
