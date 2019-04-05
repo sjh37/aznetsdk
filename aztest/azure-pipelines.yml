@@ -18,7 +18,3 @@ steps:
     inputs:
       solution: build.proj
       msbuildArguments: /t:RunTests /p:Scope=Compute
-  - task: PublishBuildArtifacts@1
-    inputs:
-      pathtoPublish: TestResults
-      artifactName: TestResults
