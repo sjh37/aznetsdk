@@ -20,5 +20,5 @@ steps:
       msbuildArguments: /t:RunTests /clp:ShowTimestamp /flp:Summary;Verbosity=minimal;LogFile=msbuild.sum /flp1:warningsonly;logfile=msbuild.wrn /flp2:errorsonly;logfile=msbuild.err /p:Scope="Compute" 
   - task: PublishTestResults@2
     inputs:
-      testResultsFiles: '**/test-results.trx'
+      testResultsFiles: '**/*.trx'
       testRunTitle: 'Test results for NET SDK tests'
