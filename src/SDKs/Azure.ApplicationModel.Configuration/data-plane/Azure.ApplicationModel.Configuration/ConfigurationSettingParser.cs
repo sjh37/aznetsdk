@@ -2,13 +2,8 @@
 // Licensed under the MIT License. See License.txt in the project root for
 // license information.
 
-using Azure.Base;
 using System;
-using System.Buffers;
-using System.Buffers.Text;
 using System.IO;
-using System.Runtime.CompilerServices;
-using System.Text;
 using System.Text.Json;
 using System.Threading;
 using System.Threading.Tasks;
@@ -96,9 +91,9 @@ namespace Azure.ApplicationModel.Configuration
             }
         }
 
-        public static async Task<SettingBatch> ParseBatchAsync(Response response, BatchRequestOptions filter, CancellationToken cancellation)
+        public static async Task<SettingBatch> ParseBatchAsync(Response response, SettingSelector selector, CancellationToken cancellation)
         {
-            TryGetNextAfterValue(ref response, out string token);
+            TryGetNextAfterValue(ref response, out string nextBatchUri);
 
             Stream content = response.ContentStream;
             using (JsonDocument json = await JsonDocument.ParseAsync(content, default, cancellation).ConfigureAwait(false))
@@ -113,7 +108,7 @@ namespace Azure.ApplicationModel.Configuration
                     settings[i++] = ReadSetting(item);
                 }
 
-                var batch = new SettingBatch(settings, token, filter);
+                var batch = new SettingBatch(settings, nextBatchUri, selector);
                 return batch;
             }
         }
@@ -136,31 +131,5 @@ namespace Azure.ApplicationModel.Configuration
             return true;
         }
     }
-
-    // TODO (pri 3): CoreFx will soon have a type like this. We should remove this one then.
-    internal class FixedSizedBufferWriter : IBufferWriter<byte>
-    {
-        private readonly byte[] _buffer;
-        private int _count;
-
-        public FixedSizedBufferWriter(byte[] buffer)
-        {
-            _buffer = buffer;
-        }
-
-        public Memory<byte> GetMemory(int minimumLength = 0) => _buffer.AsMemory(_count);
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public Span<byte> GetSpan(int minimumLength = 0) => _buffer.AsSpan(_count);
-
-        [MethodImpl(MethodImplOptions.AggressiveInlining)]
-        public void Advance(int bytes)
-        {
-            _count += bytes;
-            if (_count > _buffer.Length)
-            {
-                throw new InvalidOperationException("Cannot advance past the end of the buffer.");
-            }
-        }
-    }
 }
+

@@ -11,39 +11,48 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
     using System.Reflection;
     using System.Threading.Tasks;
     using Xunit;
-
-    public abstract class DiagnosticsTests : IDisposable
+        
+    [CollectionDefinition(nameof(DiagnosticsTests), DisableParallelization = true)]
+    public abstract class DiagnosticsTests
     {
-        protected ConcurrentQueue<(string eventName, object payload, Activity activity)> events;
-        protected FakeDiagnosticListener listener;
-        protected IDisposable subscription;
-        protected const int maxWaitSec = 10;
+        protected const int MaxWaitSec = 10;
+        protected readonly TimeSpan DefaultTimeout = TimeSpan.FromSeconds(MaxWaitSec);
 
-        protected abstract string EntityName { get; }
-        private bool disposed = false;
+        protected ConcurrentQueue<(string eventName, object payload, Activity activity)> CreateEventQueue() =>
+            new ConcurrentQueue<(string eventName, object payload, Activity activity)>();
 
-        internal DiagnosticsTests()
-        {
-            this.events = new ConcurrentQueue<(string eventName, object payload, Activity activity)>();
-            this.listener = new FakeDiagnosticListener(kvp =>
+        protected FakeDiagnosticListener CreateEventListener(string entityName, ConcurrentQueue<(string eventName, object payload, Activity activity)> eventQueue) =>
+            new FakeDiagnosticListener(kvp =>
             {
-                TestUtility.Log($"Diagnostics event: {kvp.Key}, Activity Id: {Activity.Current?.Id}");
-                if (kvp.Key.Contains("Exception"))
+                if (kvp.Key == null || kvp.Value == null)
                 {
-                    TestUtility.Log($"Exception {kvp.Value}");
+                    TestUtility.Log("Diagnostics Problem: Missing diagnostics information.  Ignoring.");
+                    return;
                 }
 
-                this.events.Enqueue((kvp.Key, kvp.Value, Activity.Current));
+                // If an entity name was provided, log those payloads where the target is explicitly not associated with the entity.
+                if (!String.IsNullOrEmpty(entityName))
+                {
+                    var targetEntity = this.GetPropertyValueFromAnonymousTypeInstance<string>(kvp.Value, "Entity", true);
+
+                    if (String.IsNullOrEmpty(targetEntity) || !String.Equals(targetEntity, entityName, StringComparison.InvariantCultureIgnoreCase))
+                    {   
+                        TestUtility.Log($"Diagnostics Mismatch: Interested in Entity [{ entityName }], received [{ kvp.Key }] for Target [{ targetEntity }].");
+                    }
+                }
+
+                eventQueue?.Enqueue((kvp.Key, kvp.Value, Activity.Current));
             });
-            this.subscription = DiagnosticListener.AllListeners.Subscribe(this.listener);
-        }
+
+        protected IDisposable SubscribeToEvents(IObserver<DiagnosticListener> listener) =>
+            DiagnosticListener.AllListeners.Subscribe(listener);
 
         #region Send
 
-        protected void AssertSendStart(string name, object payload, Activity activity, Activity parentActivity, int messageCount = 1)
+        protected void AssertSendStart(string entityName, string eventName, object payload, Activity activity, Activity parentActivity, int messageCount = 1)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.Send.Start", name);
-            AssertCommonPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.Send.Start", eventName);
+            AssertCommonPayloadProperties(entityName, payload);
             var messages = GetPropertyValueFromAnonymousTypeInstance<IList<Message>>(payload, "Messages");
             Assert.Equal(messageCount, messages.Count);
 
@@ -53,10 +62,10 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
             AssertTags(messages, activity);
         }
 
-        protected void AssertSendStop(string name, object payload, Activity activity, Activity sendActivity, int messageCount = 1)
+        protected void AssertSendStop(string entityName, string eventName, object payload, Activity activity, Activity sendActivity, int messageCount = 1)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.Send.Stop", name);
-            AssertCommonStopPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.Send.Stop", eventName);
+            AssertCommonStopPayloadProperties(entityName, payload);
 
             if (sendActivity != null)
             {
@@ -71,20 +80,20 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
 
         #region Complete
 
-        protected void AssertCompleteStart(string name, object payload, Activity activity, Activity parentActivity)
+        protected void AssertCompleteStart(string entityName, string eventName, object payload, Activity activity, Activity parentActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.Complete.Start", name);
-            AssertCommonPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.Complete.Start", eventName);
+            AssertCommonPayloadProperties(entityName, payload);
             GetPropertyValueFromAnonymousTypeInstance<IList<string>>(payload, "LockTokens");
 
             Assert.NotNull(activity);
             Assert.Equal(parentActivity, activity.Parent);
         }
 
-        protected void AssertCompleteStop(string name, object payload, Activity activity, Activity completeActivity, Activity parentActivity)
+        protected void AssertCompleteStop(string entityName, string eventName, object payload, Activity activity, Activity completeActivity, Activity parentActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.Complete.Stop", name);
-            AssertCommonStopPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.Complete.Stop", eventName);
+            AssertCommonStopPayloadProperties(entityName, payload);
 
             if (completeActivity != null)
             {
@@ -100,20 +109,20 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
 
         #region Abandon
 
-        protected void AssertAbandonStart(string name, object payload, Activity activity, Activity parentActivity)
+        protected void AssertAbandonStart(string entityName, string eventName, object payload, Activity activity, Activity parentActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.Abandon.Start", name);
-            AssertCommonPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.Abandon.Start", eventName);
+            AssertCommonPayloadProperties(entityName, payload);
             GetPropertyValueFromAnonymousTypeInstance<string>(payload, "LockToken");
 
             Assert.NotNull(activity);
             Assert.Equal(parentActivity, activity.Parent);
         }
 
-        protected void AssertAbandonStop(string name, object payload, Activity activity, Activity abandonActivity)
+        protected void AssertAbandonStop(string entityName, string eventName, object payload, Activity activity, Activity abandonActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.Abandon.Stop", name);
-            AssertCommonStopPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.Abandon.Stop", eventName);
+            AssertCommonStopPayloadProperties(entityName, payload);
 
             if (abandonActivity != null)
             {
@@ -128,20 +137,20 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
 
         #region Defer
 
-        protected void AssertDeferStart(string name, object payload, Activity activity, Activity parentActivity)
+        protected void AssertDeferStart(string entityName, string eventName, object payload, Activity activity, Activity parentActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.Defer.Start", name);
-            AssertCommonPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.Defer.Start", eventName);
+            AssertCommonPayloadProperties(entityName, payload);
             GetPropertyValueFromAnonymousTypeInstance<string>(payload, "LockToken");
 
             Assert.NotNull(activity);
             Assert.Equal(parentActivity, activity.Parent);
         }
 
-        protected void AssertDeferStop(string name, object payload, Activity activity, Activity deferActivity)
+        protected void AssertDeferStop(string entityName, string eventName, object payload, Activity activity, Activity deferActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.Defer.Stop", name);
-            AssertCommonStopPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.Defer.Stop", eventName);
+            AssertCommonStopPayloadProperties(entityName, payload);
 
             if (deferActivity != null)
             {
@@ -155,20 +164,20 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
 
         #region DeadLetter
 
-        protected void AssertDeadLetterStart(string name, object payload, Activity activity, Activity parentActivity)
+        protected void AssertDeadLetterStart(string entityName, string eventName, object payload, Activity activity, Activity parentActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.DeadLetter.Start", name);
-            AssertCommonPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.DeadLetter.Start", eventName);
+            AssertCommonPayloadProperties(entityName, payload);
             GetPropertyValueFromAnonymousTypeInstance<string>(payload, "LockToken");
 
             Assert.NotNull(activity);
             Assert.Equal(parentActivity, activity.Parent);
         }
 
-        protected void AssertDeadLetterStop(string name, object payload, Activity activity, Activity deadLetterActivity)
+        protected void AssertDeadLetterStop(string entityName, string eventName, object payload, Activity activity, Activity deadLetterActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.DeadLetter.Stop", name);
-            AssertCommonStopPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.DeadLetter.Stop", eventName);
+            AssertCommonStopPayloadProperties(entityName, payload);
 
             if (deadLetterActivity != null)
             {
@@ -182,10 +191,10 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
 
         #region Schedule
 
-        protected void AssertScheduleStart(string name, object payload, Activity activity, Activity parentActivity)
+        protected void AssertScheduleStart(string entityName, string eventName, object payload, Activity activity, Activity parentActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.Schedule.Start", name);
-            AssertCommonPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.Schedule.Start", eventName);
+            AssertCommonPayloadProperties(entityName, payload);
             var message = GetPropertyValueFromAnonymousTypeInstance<Message>(payload, "Message");
             GetPropertyValueFromAnonymousTypeInstance<DateTimeOffset>(payload, "ScheduleEnqueueTimeUtc");
 
@@ -194,10 +203,10 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
             AssertTags(message, activity);
         }
 
-        protected void AssertScheduleStop(string name, object payload, Activity activity, Activity scheduleActivity)
+        protected void AssertScheduleStop(string entityName, string eventName, object payload, Activity activity, Activity scheduleActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.Schedule.Stop", name);
-            AssertCommonStopPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.Schedule.Stop", eventName);
+            AssertCommonStopPayloadProperties(entityName, payload);
 
             Assert.Equal(scheduleActivity, activity);
             var message = GetPropertyValueFromAnonymousTypeInstance<Message>(payload, "Message");
@@ -215,20 +224,20 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
 
         #region Cancel
 
-        protected void AssertCancelStart(string name, object payload, Activity activity, Activity parentActivity)
+        protected void AssertCancelStart(string entityName, string eventName, object payload, Activity activity, Activity parentActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.Cancel.Start", name);
-            AssertCommonPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.Cancel.Start", eventName);
+            AssertCommonPayloadProperties(entityName, payload);
             GetPropertyValueFromAnonymousTypeInstance<long>(payload, "SequenceNumber");
 
             Assert.NotNull(activity);
             Assert.Equal(parentActivity, activity.Parent);
         }
 
-        protected void AssertCancelStop(string name, object payload, Activity activity, Activity scheduleActivity)
+        protected void AssertCancelStop(string entityName, string eventName, object payload, Activity activity, Activity scheduleActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.Cancel.Stop", name);
-            AssertCommonStopPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.Cancel.Stop", eventName);
+            AssertCommonStopPayloadProperties(entityName, payload);
 
             Assert.Equal(scheduleActivity, activity);
             GetPropertyValueFromAnonymousTypeInstance<long>(payload, "SequenceNumber");
@@ -238,10 +247,10 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
 
         #region Receive
 
-        protected int AssertReceiveStart(string name, object payload, Activity activity, int messagesCount = 1)
+        protected int AssertReceiveStart(string entityName, string eventName, object payload, Activity activity, int messagesCount = 1)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.Receive.Start", name);
-            AssertCommonPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.Receive.Start", eventName);
+            AssertCommonPayloadProperties(entityName, payload);
 
             var count = GetPropertyValueFromAnonymousTypeInstance<int>(payload, "RequestedMessageCount");
             if (messagesCount != -1)
@@ -254,10 +263,10 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
             return count;
         }
 
-        protected int AssertReceiveStop(string name, object payload, Activity activity, Activity receiveActivity, Activity sendActivity, int sentMessagesCount = 1, int receivedMessagesCount = 1)
+        protected int AssertReceiveStop(string entityName, string eventName, object payload, Activity activity, Activity receiveActivity, Activity sendActivity, int sentMessagesCount = 1, int receivedMessagesCount = 1)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.Receive.Stop", name);
-            AssertCommonStopPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.Receive.Stop", eventName);
+            AssertCommonStopPayloadProperties(entityName, payload);
 
             if (receiveActivity != null)
             {
@@ -285,10 +294,10 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
 
         #region ReceiveDeferred
 
-        protected void AssertReceiveDeferredStart(string name, object payload, Activity activity)
+        protected void AssertReceiveDeferredStart(string entityName, string eventName, object payload, Activity activity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.ReceiveDeferred.Start", name);
-            AssertCommonPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.ReceiveDeferred.Start", eventName);
+            AssertCommonPayloadProperties(entityName, payload);
 
             Assert.Single(GetPropertyValueFromAnonymousTypeInstance<IEnumerable<long>>(payload, "SequenceNumbers"));
 
@@ -296,10 +305,10 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
             Assert.Null(activity.Parent);
         }
 
-        protected void AssertReceiveDeferredStop(string name, object payload, Activity activity, Activity receiveActivity, Activity sendActivity)
+        protected void AssertReceiveDeferredStop(string entityName, string eventName, object payload, Activity activity, Activity receiveActivity, Activity sendActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.ReceiveDeferred.Stop", name);
-            AssertCommonStopPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.ReceiveDeferred.Stop", eventName);
+            AssertCommonStopPayloadProperties(entityName, payload);
 
             if (receiveActivity != null)
             {
@@ -320,10 +329,10 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
 
         #region Process
 
-        protected void AssertProcessStart(string name, object payload, Activity activity, Activity sendActivity)
+        protected void AssertProcessStart(string entityName, string eventName, object payload, Activity activity, Activity sendActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.Process.Start", name);
-            AssertCommonPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.Process.Start", eventName);
+            AssertCommonPayloadProperties(entityName, payload);
 
             var message = GetPropertyValueFromAnonymousTypeInstance<Message>(payload, "Message");
 
@@ -335,10 +344,10 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
             AssertTags(message, activity);
         }
 
-        protected void AssertProcessStop(string name, object payload, Activity activity, Activity processActivity)
+        protected void AssertProcessStop(string entityName, string eventName, object payload, Activity activity, Activity processActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.Process.Stop", name);
-            AssertCommonStopPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.Process.Stop", eventName);
+            AssertCommonStopPayloadProperties(entityName, payload);
 
             if (processActivity != null)
             {
@@ -351,10 +360,10 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
 
         #region Peek
 
-        protected void AssertPeekStart(string name, object payload, Activity activity)
+        protected void AssertPeekStart(string entityName, string eventName, object payload, Activity activity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.Peek.Start", name);
-            AssertCommonPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.Peek.Start", eventName);
+            AssertCommonPayloadProperties(entityName, payload);
 
             GetPropertyValueFromAnonymousTypeInstance<long>(payload, "FromSequenceNumber");
             Assert.Equal(1, GetPropertyValueFromAnonymousTypeInstance<int>(payload, "RequestedMessageCount"));
@@ -363,10 +372,10 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
             Assert.Null(activity.Parent);
         }
 
-        protected void AssertPeekStop(string name, object payload, Activity activity, Activity peekActivity, Activity sendActivity)
+        protected void AssertPeekStop(string entityName, string eventName, object payload, Activity activity, Activity peekActivity, Activity sendActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.Peek.Stop", name);
-            AssertCommonStopPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.Peek.Stop", eventName);
+            AssertCommonStopPayloadProperties(entityName, payload);
 
             if (peekActivity != null)
             {
@@ -386,20 +395,20 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
 
         #region RenewLock
 
-        protected void AssertRenewLockStart(string name, object payload, Activity activity, Activity parentActivity)
+        protected void AssertRenewLockStart(string entityName, string eventName, object payload, Activity activity, Activity parentActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.RenewLock.Start", name);
-            AssertCommonPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.RenewLock.Start", eventName);
+            AssertCommonPayloadProperties(entityName, payload);
             GetPropertyValueFromAnonymousTypeInstance<string>(payload, "LockToken");
 
             Assert.NotNull(activity);
             Assert.Equal(parentActivity, activity.Parent);
         }
 
-        protected void AssertRenewLockStop(string name, object payload, Activity activity, Activity renewLockActivity)
+        protected void AssertRenewLockStop(string entityName, string eventName, object payload, Activity activity, Activity renewLockActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.RenewLock.Stop", name);
-            AssertCommonStopPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.RenewLock.Stop", eventName);
+            AssertCommonStopPayloadProperties(entityName, payload);
 
             if (renewLockActivity != null)
             {
@@ -459,10 +468,10 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
             }
         }
 
-        protected void AssertException(string name, object payload, Activity activity, Activity parentActivity)
+        protected void AssertException(string entityName, string eventName, object payload, Activity activity, Activity parentActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.Exception", name);
-            AssertCommonPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.Exception", eventName);
+            AssertCommonPayloadProperties(entityName, payload);
 
             GetPropertyValueFromAnonymousTypeInstance<Exception>(payload, "Exception");
 
@@ -473,17 +482,17 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
             }
         }
 
-        protected void AssertCommonPayloadProperties(object eventPayload)
+        protected void AssertCommonPayloadProperties(string entityName, object eventPayload)
         {
             var entity = GetPropertyValueFromAnonymousTypeInstance<string>(eventPayload, "Entity");
             GetPropertyValueFromAnonymousTypeInstance<Uri>(eventPayload, "Endpoint");
 
-            Assert.Equal(this.EntityName, entity);
+            Assert.Equal(entityName, entity);
         }
 
-        protected void AssertCommonStopPayloadProperties(object eventPayload)
+        protected void AssertCommonStopPayloadProperties(string entityName, object eventPayload)
         {
-            AssertCommonPayloadProperties(eventPayload);
+            AssertCommonPayloadProperties(entityName, eventPayload);
             var status = GetPropertyValueFromAnonymousTypeInstance<TaskStatus>(eventPayload, "Status");
             Assert.Equal(TaskStatus.RanToCompletion, status);
         }
@@ -506,42 +515,6 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
             }
 
             return (T)propertyValue;
-        }
-
-        public void Dispose()
-        {
-            Dispose(true);
-            GC.SuppressFinalize(this);
-        }
-
-        protected virtual void Dispose(bool disposing)
-        {
-            if (this.disposed)
-                return;
-
-            if (disposing)
-            {
-                //Thread.Sleep(90000);
-                this.listener?.Disable();
-
-                while (this.events.TryDequeue(out var evnt))
-                {
-                }
-
-                while (Activity.Current != null)
-                {
-                    Activity.Current.Stop();
-                }
-
-                this.listener?.Dispose();
-                this.subscription?.Dispose();
-
-                this.events = null;
-                this.listener = null;
-                this.subscription = null;
-            }
-
-            this.disposed = true;
         }
     }
 }

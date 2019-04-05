@@ -15,41 +15,38 @@ namespace Microsoft.Azure.ServiceBus.UnitTests
         [LiveTest]
         async Task SendAndReceiveWithWebSocketsTest()
         {
-            var taskCompletionSource = new TaskCompletionSource<Message>();
-            var queueClient = new QueueClient(TestUtility.WebSocketsNamespaceConnectionString, TestConstants.NonPartitionedQueueName, ReceiveMode.ReceiveAndDelete);
-            try
+            await ServiceBusScope.UsingQueueAsync(partitioned: false, sessionEnabled: false, async queueName =>
             {
-                var random = new Random();
-                var contentAsBytes = new byte[8];
-                random.NextBytes(contentAsBytes);
+                var tcs = new TaskCompletionSource<Message>(TaskCreationOptions.RunContinuationsAsynchronously);
+                var queueClient = new QueueClient(TestUtility.WebSocketsNamespaceConnectionString, queueName, ReceiveMode.ReceiveAndDelete);
+                
+                try
+                {
+                    var random = new Random();
+                    var contentAsBytes = new byte[8];
+                    random.NextBytes(contentAsBytes);
 
-                queueClient.RegisterMessageHandler((message, token) =>
+                    queueClient.RegisterMessageHandler((message, token) =>
                     {
-                        taskCompletionSource.SetResult(message);
+                        tcs.TrySetResult(message);
                         return Task.CompletedTask;
                     },
                     exceptionReceivedArgs =>
                     {
-                        taskCompletionSource.SetException(exceptionReceivedArgs.Exception);
+                        tcs.TrySetException(exceptionReceivedArgs.Exception);
                         return Task.CompletedTask;
                     });
-                await queueClient.SendAsync(new Message(contentAsBytes));
 
-                var timeoutTask = Task.Delay(Timeout);
-                var receiveTask = taskCompletionSource.Task;
-
-                if (await Task.WhenAny(timeoutTask, receiveTask).ConfigureAwait(false) == timeoutTask)
-                {
-                    throw new TimeoutException();
+                    await queueClient.SendAsync(new Message(contentAsBytes));
+                    
+                    var receivedMessage = await tcs.Task.WithTimeout(Timeout);
+                    Assert.Equal(contentAsBytes, receivedMessage.Body);
                 }
-
-                var receivedMessage = receiveTask.Result;
-                Assert.Equal(contentAsBytes, receivedMessage.Body);
-            }
-            finally
-            {
-                await queueClient.CloseAsync();
-            }
+                finally
+                {
+                    await queueClient.CloseAsync();
+                }
+            });
         }
     }
 }

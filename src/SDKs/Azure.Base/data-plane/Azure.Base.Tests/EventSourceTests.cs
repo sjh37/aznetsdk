@@ -18,7 +18,7 @@ namespace Azure.Base.Tests
 {
     // Avoid running these tests in parallel with anything else that's sharing the event source
     [NonParallelizable]
-    public class EventSourceTests
+    public class EventSourceTests : PipelineTestBase
     {
         private readonly TestEventListener _listener = new TestEventListener();
 
@@ -43,47 +43,75 @@ namespace Azure.Base.Tests
         [Test]
         public async Task SendingRequestProducesEvents()
         {
-            var options = new HttpPipelineOptions(new HttpClientTransport(new HttpClient(new MockHttpMessageHandler())));
-            options.LoggingPolicy = LoggingPolicy.Shared;
+            var handler = new MockHttpClientHandler(httpRequestMessage =>
+            {
+                var response = new HttpResponseMessage((HttpStatusCode)500);
+                response.Content = new ByteArrayContent(new byte[] { 6, 7, 8, 9, 0 });
+                response.Headers.Add("Custom-Response-Header", "Improved value");
+                return Task.FromResult(response);
+            });
+            var transport = new HttpClientTransport(new HttpClient(handler));
+            var options = new HttpPipelineOptions(transport)
+            {
+                LoggingPolicy = LoggingPolicy.Shared
+            };
 
             var pipeline = options.Build("test", "1.0.0");
+            string requestId;
 
             using (var request = pipeline.CreateRequest())
             {
-                request.SetRequestLine(HttpVerb.Get, new Uri("https://contoso.a.io"));
-                var response =  await pipeline.SendRequestAsync(request, CancellationToken.None);
+                request.SetRequestLine(HttpPipelineMethod.Get, new Uri("https://contoso.a.io"));
+                request.AddHeader("Date", "3/26/2019");
+                request.AddHeader("Custom-Header", "Value");
+                request.Content = HttpPipelineRequestContent.Create(new byte[] { 1, 2, 3, 4, 5 });
+                requestId = request.RequestId;
+
+                var response = await pipeline.SendRequestAsync(request, CancellationToken.None);
 
                 Assert.AreEqual(500, response.Status);
             }
 
-            Assert.True(_listener.EventData.Any(e =>
-                e.EventId == 3 &&
-                e.EventName == "ProcessingRequest" &&
-                GetStringProperty(e, "request").Contains("https://contoso.a.io")));
+            var e = _listener.SingleEventById(1);
+            Assert.AreEqual(EventLevel.Informational, e.Level);
+            Assert.AreEqual("Request", e.EventName);
+            Assert.AreEqual(requestId, e.GetProperty<string>("requestId"));
+            Assert.AreEqual("https://contoso.a.io/", e.GetProperty<string>("uri"));
+            Assert.AreEqual("GET", e.GetProperty<string>("method"));
+            StringAssert.Contains($"Date:3/26/2019{Environment.NewLine}", e.GetProperty<string>("headers"));
+            StringAssert.Contains($"Custom-Header:Value{Environment.NewLine}", e.GetProperty<string>("headers"));
 
-            Assert.True(_listener.EventData.Any(e =>
-                e.EventId == 4 &&
-                e.EventName == "ProcessingResponse" &&
-                GetStringProperty(e, "response").Contains("500")));
+            e = _listener.SingleEventById(2);
+            Assert.AreEqual(EventLevel.Verbose, e.Level);
+            Assert.AreEqual("RequestContent", e.EventName);
+            Assert.AreEqual(requestId, e.GetProperty<string>("requestId"));
+            CollectionAssert.AreEqual(new byte[] { 1, 2, 3, 4, 5 }, e.GetProperty<byte[]>("content"));
 
-            Assert.True(_listener.EventData.Any(e =>
-                e.EventId == 6 &&
-                e.EventName == "ErrorResponse" &&
-                (int)GetProperty(e, "status") == 500));
-        }
+            e = _listener.SingleEventById(5);
+            Assert.AreEqual(EventLevel.Informational, e.Level);
+            Assert.AreEqual("Response", e.EventName);
+            Assert.AreEqual(requestId, e.GetProperty<string>("requestId"));
+            Assert.AreEqual(e.GetProperty<int>("status"), 500);
+            StringAssert.Contains($"Custom-Response-Header:Improved value{Environment.NewLine}", e.GetProperty<string>("headers"));
 
-        private object GetProperty(EventWrittenEventArgs data, string propName)
-            => data.Payload[data.PayloadNames.IndexOf(propName)];
+            e = _listener.SingleEventById(6);
+            Assert.AreEqual(EventLevel.Verbose, e.Level);
+            Assert.AreEqual("ResponseContent", e.EventName);
+            Assert.AreEqual(requestId, e.GetProperty<string>("requestId"));
+            CollectionAssert.AreEqual(new byte[] { 6, 7, 8, 9, 0 }, e.GetProperty<byte[]>("content"));
 
-        private string GetStringProperty(EventWrittenEventArgs data, string propName)
-            => data.Payload[data.PayloadNames.IndexOf(propName)] as string;
+            e = _listener.SingleEventById(8);
+            Assert.AreEqual(EventLevel.Error, e.Level);
+            Assert.AreEqual("ErrorResponse", e.EventName);
+            Assert.AreEqual(requestId, e.GetProperty<string>("requestId"));
+            Assert.AreEqual(e.GetProperty<int>("status"), 500);
+            StringAssert.Contains($"Custom-Response-Header:Improved value{Environment.NewLine}", e.GetProperty<string>("headers"));
 
-        private class MockHttpMessageHandler: HttpMessageHandler
-        {
-            protected override Task<HttpResponseMessage> SendAsync(HttpRequestMessage request, CancellationToken cancellationToken)
-            {
-                return Task.FromResult(new HttpResponseMessage(HttpStatusCode.InternalServerError));
-            }
+            e = _listener.SingleEventById(9);
+            Assert.AreEqual(EventLevel.Informational, e.Level);
+            Assert.AreEqual("ErrorResponseContent", e.EventName);
+            Assert.AreEqual(requestId, e.GetProperty<string>("requestId"));
+            CollectionAssert.AreEqual(new byte[] { 6, 7, 8, 9, 0 }, e.GetProperty<byte[]>("content"));
         }
     }
 }

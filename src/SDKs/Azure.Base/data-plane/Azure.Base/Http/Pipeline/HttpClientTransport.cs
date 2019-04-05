@@ -35,7 +35,7 @@ namespace Azure.Base.Http.Pipeline
             using (HttpRequestMessage httpRequest = pipelineRequest.BuildRequestMessage(message.Cancellation))
             {
                 HttpResponseMessage responseMessage = await ProcessCoreAsync(message.Cancellation, httpRequest).ConfigureAwait(false);
-                message.Response = new PipelineResponse(responseMessage);
+                message.Response = new PipelineResponse(message.Request.RequestId, responseMessage);
             }
         }
 
@@ -97,6 +97,7 @@ namespace Azure.Base.Http.Pipeline
             public PipelineRequest()
             {
                 _requestMessage = new HttpRequestMessage();
+                RequestId = Guid.NewGuid().ToString();
             }
 
             public override Uri Uri
@@ -105,9 +106,9 @@ namespace Azure.Base.Http.Pipeline
                 set => _requestMessage.RequestUri = value;
             }
 
-            public override HttpVerb Method
+            public override HttpPipelineMethod Method
             {
-                get => ToPipelineMethod(_requestMessage.Method);
+                get => HttpPipelineMethodConverter.Parse(_requestMessage.Method.Method);
                 set => _requestMessage.Method = ToHttpClientMethod(value);
             }
 
@@ -120,6 +121,8 @@ namespace Azure.Base.Http.Pipeline
                     _requestContent.PipelineContent = value;
                 }
             }
+
+            public override string RequestId { get; set; }
 
             public override void AddHeader(HttpHeader header)
             {
@@ -173,30 +176,16 @@ namespace Azure.Base.Http.Pipeline
             public override string ToString() =>  _requestMessage.ToString();
 
             readonly static HttpMethod s_patch = new HttpMethod("PATCH");
-            public static HttpMethod ToHttpClientMethod(HttpVerb method)
+            public static HttpMethod ToHttpClientMethod(HttpPipelineMethod method)
             {
                 switch (method) {
-                    case HttpVerb.Get: return HttpMethod.Get;
-                    case HttpVerb.Post: return HttpMethod.Post;
-                    case HttpVerb.Put: return HttpMethod.Put;
-                    case HttpVerb.Delete: return HttpMethod.Delete;
-                    case HttpVerb.Patch: return s_patch;
+                    case HttpPipelineMethod.Get: return HttpMethod.Get;
+                    case HttpPipelineMethod.Post: return HttpMethod.Post;
+                    case HttpPipelineMethod.Put: return HttpMethod.Put;
+                    case HttpPipelineMethod.Delete: return HttpMethod.Delete;
+                    case HttpPipelineMethod.Patch: return s_patch;
 
                     default: throw new NotImplementedException();
-                }
-            }
-
-            public static HttpVerb ToPipelineMethod(HttpMethod method)
-            {
-                switch (method.Method) {
-                    case "GET": return HttpVerb.Get;
-                    case "POST": return HttpVerb.Post;
-                    case "PUT": return HttpVerb.Put;
-                    case "DELETE": return HttpVerb.Delete;
-                    case "PATCH": return HttpVerb.Patch;
-
-                    // method argument is not a REST verb
-                    default: throw new ArgumentOutOfRangeException(nameof(method));
                 }
             }
 
@@ -240,8 +229,9 @@ namespace Azure.Base.Http.Pipeline
         {
             readonly HttpResponseMessage _responseMessage;
 
-            public PipelineResponse(HttpResponseMessage responseMessage)
+            public PipelineResponse(string requestId, HttpResponseMessage responseMessage)
             {
+                RequestId = requestId;
                 _responseMessage = responseMessage;
             }
 
@@ -250,6 +240,8 @@ namespace Azure.Base.Http.Pipeline
             // TODO (pri 1): is it ok to just call GetResult here?
             public override Stream ResponseContentStream
                 => _responseMessage?.Content?.ReadAsStreamAsync().ConfigureAwait(false).GetAwaiter().GetResult();
+
+            public override string RequestId { get; set; }
 
             public override bool TryGetHeader(string name, out string value) => HttpClientTransport.TryGetHeader(_responseMessage.Headers, _responseMessage.Content, name, out value);
 
