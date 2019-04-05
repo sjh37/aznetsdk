@@ -2,7 +2,6 @@
 // Licensed under the MIT License. See License.txt in the project root for
 // license information.
 
-using Azure.Base;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -85,9 +84,9 @@ namespace Azure.ApplicationModel.Configuration
             try {
                 for (int i = 0; i < _keysToWatch.Count; i++) {
 
-                    var response = await _client.GetAsync(_keysToWatch[i], null, cancellationToken).ConfigureAwait(false);
+                    var response = await _client.GetAsync(_keysToWatch[i], null, default, cancellationToken).ConfigureAwait(false);
                     if (response.Status == 200) {
-                        var setting = response.Result;
+                        var setting = response.Value;
                         _lastPolled[setting.Key] = setting;
                     }
                     // TODO (pri 2): what should we do when the request fails?
@@ -106,14 +105,14 @@ namespace Azure.ApplicationModel.Configuration
 
             var tasks = new Task<Response<ConfigurationSetting>>[_keysToWatch.Count];
             for (int i = 0; i < _keysToWatch.Count; i++) {
-                tasks[i] = _client.GetAsync(_keysToWatch[i], null, cancellationToken);
+                tasks[i] = _client.GetAsync(_keysToWatch[i], null, default, cancellationToken);
             }
             await Task.WhenAll(tasks);
 
             foreach(var task in tasks) {
                 var response = task.Result;
                 if (response.Status == 200) {
-                    ConfigurationSetting current = response.Result;
+                    ConfigurationSetting current = response.Value;
                     _lastPolled.TryGetValue(current.Key, out var previous);
                     if (HasChanged(current, previous)) {
                         if (current == null) _lastPolled.Remove(current.Key);

@@ -2,15 +2,14 @@
 // Licensed under the MIT License. See License.txt in the project root for
 // license information.
 
-using Azure.Base;
-using Azure.Base.Http;
 using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.Diagnostics;
-using System.Security.Cryptography;
-using System.Text;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
+using Azure.Base.Http;
 
 namespace Azure.ApplicationModel.Configuration
 {
@@ -19,8 +18,6 @@ namespace Azure.ApplicationModel.Configuration
         const string MediaTypeProblemApplication = "application/problem+json";
         const string AcceptDateTimeFormat = "ddd, dd MMM yyy HH:mm:ss 'GMT'";
         const string AcceptDatetimeHeader = "Accept-Datetime";
-        const string ClientRequestIdHeader = "x-ms-client-request-id";
-        const string EchoClientRequestId = "x-ms-return-client-request-id";
         const string KvRoute = "/kv/";
         const string LocksRoute = "/locks/";
         const string RevisionsRoute = "/revisions/";
@@ -30,38 +27,12 @@ namespace Azure.ApplicationModel.Configuration
         const string IfMatchName = "If-Match";
         const string IfNoneMatch = "If-None-Match";
 
+        static readonly char[] ReservedCharacters = new char[] { ',', '\\' };
+
         static readonly HttpHeader MediaTypeKeyValueApplicationHeader = new HttpHeader(
             HttpHeader.Names.Accept,
             "application/vnd.microsoft.appconfig.kv+json"
         );
-
-        // TODO (pri 3): do all the methods that call this accept revisions?
-        static void AddOptionsHeaders(RequestOptions options, HttpPipelineRequest request)
-        {
-            if (options == null) return;
-
-            if (options.ETag.IfMatch != default)
-            {
-                request.AddHeader(IfMatchName, $"\"{options.ETag.IfMatch}\"");
-            }
-
-            if (options.ETag.IfNoneMatch != default)
-            {
-                request.AddHeader(IfNoneMatch, $"\"{options.ETag.IfNoneMatch}\"");
-            }
-
-            if (options.Revision.HasValue)
-            {
-                var dateTime = options.Revision.Value.UtcDateTime.ToString(AcceptDateTimeFormat);
-                request.AddHeader(AcceptDatetimeHeader, dateTime);
-            }
-        }
-
-        static void AddClientRequestID(HttpPipelineRequest request)
-        {
-            request.AddHeader(ClientRequestIdHeader, Guid.NewGuid().ToString());
-            request.AddHeader(EchoClientRequestId, "true");
-        }
 
         static async Task<Response<ConfigurationSetting>> CreateResponse(Response response, CancellationToken cancellation)
         {
@@ -138,56 +109,88 @@ namespace Azure.ApplicationModel.Configuration
             return builder.Uri;
         }
 
-        void BuildBatchQuery(UriBuilder builder, BatchRequestOptions options)
+        private string EscapeReservedCharacters(string input)
         {
-            if (!string.IsNullOrEmpty(options.Key))
+            string resp = string.Empty;
+            for (int i=0; i<input.Length; i++)
             {
-                builder.AppendQuery(KeyQueryFilter, options.Key);
-            }
-
-            if (!string.IsNullOrEmpty(options.BatchLink))
-            {
-                builder.AppendQuery("after", options.BatchLink);
-            }
-
-            if (options.Label != null)
-            {
-                if (options.Label == string.Empty)
+                if (ReservedCharacters.Contains(input[i]))
                 {
-                    options.Label = "\0";
+                    resp += $"\\{input[i]}";
                 }
-                builder.AppendQuery(LabelQueryFilter, options.Label);
+                else
+                {
+                    resp += input[i];
+                }
+            }
+            return resp;
+        }
+
+        internal void BuildBatchQuery(UriBuilder builder, SettingSelector selector)
+        {
+            if (selector.Keys.Count > 0)
+            {
+                var keysCopy = new List<string>();
+                foreach (var key in selector.Keys)
+                {
+                    if (key.IndexOfAny(ReservedCharacters) != -1)
+                    {
+                        keysCopy.Add(EscapeReservedCharacters(key));
+                    }
+                    else
+                    {
+                        keysCopy.Add(key);
+                    }
+                }
+                var keys = string.Join(",", keysCopy).ToLower();
+                builder.AppendQuery(KeyQueryFilter, keys);
             }
 
-            if (options.Fields != SettingFields.All)
+            if (selector.Labels.Count > 0)
             {
-                var filter = (options.Fields).ToString().ToLower();
+                var labelsCopy = new List<string>();
+                foreach (var label in selector.Labels)
+                {
+                    if (label == string.Empty)
+                    {
+                        labelsCopy.Add("\0");
+                    }
+                    else
+                    {
+                        labelsCopy.Add(EscapeReservedCharacters(label));
+                    }
+                }
+                var labels = string.Join(",", labelsCopy).ToLower();
+                builder.AppendQuery(LabelQueryFilter, labels);
+            }
+
+            if (selector.Fields != SettingFields.All)
+            {
+                var filter = (selector.Fields).ToString().ToLower();
                 builder.AppendQuery(FieldsQueryFilter, filter);
             }
+
+            if (!string.IsNullOrEmpty(selector.BatchLink))
+            {
+                builder.AppendQuery("after", selector.BatchLink);
+            }
         }
 
-        Uri BuildUriForList()
+        Uri BuildUriForGetBatch(SettingSelector selector)
         {
             var builder = new UriBuilder(_baseUri);
             builder.Path = KvRoute;
+            BuildBatchQuery(builder, selector);
+
             return builder.Uri;
         }
 
-        Uri BuildUriForGetBatch(BatchRequestOptions options)
-        {
-            var builder = new UriBuilder(_baseUri);
-            builder.Path = KvRoute;
-
-            BuildBatchQuery(builder, options);
-            return builder.Uri;
-        }
-
-        Uri BuildUriForRevisions(BatchRequestOptions options)
+        Uri BuildUriForRevisions(SettingSelector selector)
         {
             var builder = new UriBuilder(_baseUri);
             builder.Path = RevisionsRoute;
+            BuildBatchQuery(builder, selector);
 
-            BuildBatchQuery(builder, options);
             return builder.Uri;
         }
 
@@ -208,35 +211,6 @@ namespace Azure.ApplicationModel.Configuration
 
             return content;
         }
-
-        internal static void AddAuthenticationHeaders(HttpPipelineRequest request, Uri uri, HttpVerb method, ReadOnlyMemory<byte> content, byte[] secret, string credential)
-        {
-            string contentHash = null;
-            using (var alg = SHA256.Create())
-            {
-                // TODO (pri 3): ToArray should nopt be called here. Instead, TryGetArray, or PipelineContent should do hashing on the fly
-                contentHash = Convert.ToBase64String(alg.ComputeHash(content.ToArray()));
-            }
-
-            using (var hmac = new HMACSHA256(secret))
-            {
-                var host = uri.Host;
-                var pathAndQuery = uri.PathAndQuery;
-
-                string verb = method.ToString().ToUpper();
-                DateTimeOffset utcNow = DateTimeOffset.UtcNow;
-                var utcNowString = utcNow.ToString("r");
-                var stringToSign = $"{verb}\n{pathAndQuery}\n{utcNowString};{host};{contentHash}";
-                var signature = Convert.ToBase64String(hmac.ComputeHash(Encoding.ASCII.GetBytes(stringToSign))); // Calculate the signature
-                string signedHeaders = "date;host;x-ms-content-sha256"; // Semicolon separated header names
-
-                // TODO (pri 3): should date header writing be moved out from here?
-                request.AddHeader("Date", utcNowString);
-                request.AddHeader("x-ms-content-sha256", contentHash);
-                request.AddHeader("Authorization", $"HMAC-SHA256 Credential={credential}, SignedHeaders={signedHeaders}, Signature={signature}");
-            }
-        }
-
         #region nobody wants to see these
         [EditorBrowsable(EditorBrowsableState.Never)]
         public override bool Equals(object obj) => base.Equals(obj);

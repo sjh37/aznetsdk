@@ -6,213 +6,193 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
     using System;
     using System.Diagnostics;
     using System.Linq;
-    using System.Threading;
     using System.Threading.Tasks;
-
     using Microsoft.Azure.ServiceBus.Core;
     using Xunit;
 
+    [Collection(nameof(DiagnosticsTests))]
     public class SessionDiagnosticsTests : DiagnosticsTests
     {
-        protected override string EntityName => TestConstants.SessionNonPartitionedQueueName;
-        private IMessageSession messageSession;
-        private SessionClient sessionClient;
-        private MessageSender messageSender;
-        private QueueClient queueClient;
-        private bool disposed;
-
         [Fact]
         [LiveTest]
         [DisplayTestMethodName]
-        async Task AcceptSetAndGetStateGetFireEvents()
+        public async Task AcceptSetAndGetStateGetFireEvents()
         {
-            this.messageSender = new MessageSender(TestUtility.NamespaceConnectionString,
-                TestConstants.SessionNonPartitionedQueueName);
-            this.sessionClient = new SessionClient(TestUtility.NamespaceConnectionString,
-                TestConstants.SessionNonPartitionedQueueName, ReceiveMode.ReceiveAndDelete);
-
-            this.listener.Enable();
-
-            var sessionId = Guid.NewGuid().ToString();
-            await this.messageSender.SendAsync(new Message
+            await ServiceBusScope.UsingQueueAsync(partitioned: false, sessionEnabled: true, async queueName =>
             {
-                MessageId = "messageId",
-                SessionId = sessionId
-            });
-            this.messageSession = await this.sessionClient.AcceptMessageSessionAsync(sessionId);
-
-            await this.messageSession.SetStateAsync(new byte[] {1});
-            await this.messageSession.GetStateAsync();
-            await this.messageSession.SetStateAsync(new byte[] { });
-
-            await this.messageSession.ReceiveAsync();
-
-            Assert.True(events.TryDequeue(out var sendStart));
-            AssertSendStart(sendStart.eventName, sendStart.payload, sendStart.activity, null);
-
-            Assert.True(events.TryDequeue(out var sendStop));
-            AssertSendStop(sendStop.eventName, sendStop.payload, sendStop.activity, sendStart.activity);
-
-            Assert.True(events.TryDequeue(out var acceptStart));
-            AssertAcceptMessageSessionStart(acceptStart.eventName, acceptStart.payload, acceptStart.activity);
-
-            Assert.True(events.TryDequeue(out var acceptStop));
-            AssertAcceptMessageSessionStop(acceptStop.eventName, acceptStop.payload, acceptStop.activity,
-                acceptStart.activity);
-
-            Assert.True(events.TryDequeue(out var setStateStart));
-            AssertSetSessionStateStart(setStateStart.eventName, setStateStart.payload, setStateStart.activity);
-
-            Assert.True(events.TryDequeue(out var setStateStop));
-            AssertSetSessionStateStop(setStateStop.eventName, setStateStop.payload, setStateStop.activity,
-                setStateStart.activity);
-
-            Assert.True(events.TryDequeue(out var getStateStart));
-            AssertGetSessionStateStart(getStateStart.eventName, getStateStart.payload, getStateStart.activity);
-
-            Assert.True(events.TryDequeue(out var getStateStop));
-            AssertGetSessionStateStop(getStateStop.eventName, getStateStop.payload, getStateStop.activity,
-                getStateStop.activity);
-
-            Assert.True(events.TryDequeue(out var setStateStart2));
-            Assert.True(events.TryDequeue(out var setStateStop2));
-
-            Assert.True(events.TryDequeue(out var receiveStart));
-            AssertReceiveStart(receiveStart.eventName, receiveStart.payload, receiveStart.activity);
-
-            Assert.True(events.TryDequeue(out var receiveStop));
-            AssertReceiveStop(receiveStop.eventName, receiveStop.payload, receiveStop.activity, receiveStart.activity,
-                sendStart.activity);
-
-            Assert.True(events.IsEmpty);
-        }
-
-        [Fact]
-        [LiveTest]
-        [DisplayTestMethodName]
-        async Task EventsAreNotFiredWhenDiagnosticsIsDisabled()
-        {
-            this.messageSender = new MessageSender(TestUtility.NamespaceConnectionString,
-                TestConstants.SessionNonPartitionedQueueName);
-            this.sessionClient = new SessionClient(TestUtility.NamespaceConnectionString,
-                TestConstants.SessionNonPartitionedQueueName, ReceiveMode.ReceiveAndDelete);
-
-            this.listener.Disable();
-
-            var sessionId = Guid.NewGuid().ToString();
-            await this.messageSender.SendAsync(new Message
-            {
-                MessageId = "messageId",
-                SessionId = sessionId
-            });
-            this.messageSession = await sessionClient.AcceptMessageSessionAsync(sessionId);
-
-            await this.messageSession.SetStateAsync(new byte[] {1});
-            await this.messageSession.GetStateAsync();
-            await this.messageSession.SetStateAsync(new byte[] { });
-
-            await this.messageSession.ReceiveAsync();
-
-            Assert.True(events.IsEmpty);
-        }
-
-        [Fact]
-        [LiveTest]
-        [DisplayTestMethodName]
-        async Task SessionHandlerFireEvents()
-        {
-            TimeSpan timeout = TimeSpan.FromSeconds(5);
-            this.queueClient = new QueueClient(TestUtility.NamespaceConnectionString,
-                TestConstants.SessionNonPartitionedQueueName, ReceiveMode.ReceiveAndDelete, new NoRetry())
-            {
-                OperationTimeout = timeout
-            };
-
-            this.queueClient.ServiceBusConnection.OperationTimeout = timeout;
-            this.queueClient.SessionClient.OperationTimeout = timeout;
-
-            Stopwatch sw = Stopwatch.StartNew();
-            ManualResetEvent processingDone = new ManualResetEvent(false);
-            this.listener.Enable((name, queueName, arg) => !name.Contains("AcceptMessageSession") &&
-                                                      !name.Contains("Receive") &&
-                                                      !name.Contains("Exception"));
-            var sessionId = Guid.NewGuid().ToString();
-            var message = new Message
-            {
-                MessageId = "messageId",
-                SessionId = sessionId
-            };
-            await this.queueClient.SendAsync(message);
-
-            this.queueClient.RegisterSessionHandler((session, msg, ct) =>
+                var messageSender = new MessageSender(TestUtility.NamespaceConnectionString, queueName);
+                var sessionClient = new SessionClient(TestUtility.NamespaceConnectionString, queueName, ReceiveMode.ReceiveAndDelete);
+                var messageSession = default(IMessageSession);
+                var eventQueue = this.CreateEventQueue();
+                
+                try
                 {
-                    processingDone.Set();
-                    return Task.CompletedTask;
-                },
-                exArgs => Task.CompletedTask);
+                    using (var listener = this.CreateEventListener(queueName, eventQueue))
+                    using (var subscription = this.SubscribeToEvents(listener))
+                    {
+                        listener.Enable();
 
-            processingDone.WaitOne(TimeSpan.FromSeconds(maxWaitSec));
+                        var sessionId = Guid.NewGuid().ToString();
+                        await messageSender.SendAsync(new Message
+                        {
+                            MessageId = "messageId",
+                            SessionId = sessionId
+                        });
 
-            Assert.True(events.TryDequeue(out var sendStart));
-            AssertSendStart(sendStart.eventName, sendStart.payload, sendStart.activity, null);
+                        messageSession = await sessionClient.AcceptMessageSessionAsync(sessionId);
 
-            Assert.True(events.TryDequeue(out var sendStop));
-            AssertSendStop(sendStop.eventName, sendStop.payload, sendStop.activity, sendStart.activity);
+                        await messageSession.SetStateAsync(new byte[] {1});
+                        await messageSession.GetStateAsync();
+                        await messageSession.SetStateAsync(new byte[] { });
+                        await messageSession.ReceiveAsync();
 
-            Assert.True(events.TryDequeue(out var processStart));
-            AssertProcessSessionStart(processStart.eventName, processStart.payload, processStart.activity,
-                sendStart.activity);
+                        Assert.True(eventQueue.TryDequeue(out var sendStart));
+                        AssertSendStart(queueName, sendStart.eventName, sendStart.payload, sendStart.activity, null);
 
-            int wait = 0;
-            while (wait++ < maxWaitSec && events.Count < 1)
-            {
-                await Task.Delay(TimeSpan.FromSeconds(1));
-            }
+                        Assert.True(eventQueue.TryDequeue(out var sendStop));
+                        AssertSendStop(queueName, sendStop.eventName, sendStop.payload, sendStop.activity, sendStart.activity);
 
-            Assert.True(events.TryDequeue(out var processStop));
-            AssertProcessSessionStop(processStop.eventName, processStop.payload, processStop.activity,
-                processStart.activity);
+                        Assert.True(eventQueue.TryDequeue(out var acceptStart));
+                        AssertAcceptMessageSessionStart(queueName, acceptStart.eventName, acceptStart.payload, acceptStart.activity);
 
-            Assert.True(events.IsEmpty);
+                        Assert.True(eventQueue.TryDequeue(out var acceptStop));
+                        AssertAcceptMessageSessionStop(queueName, acceptStop.eventName, acceptStop.payload, acceptStop.activity,
+                            acceptStart.activity);
 
-            // workaround for https://github.com/Azure/azure-service-bus-dotnet/issues/372:
-            // SessionPumpTaskAsync calls AcceptMessageSessionAsync() without cancellation token.
-            // Even after SessionPump is stopped, this Task may still wait for session during operation timeout
-            // It may interferee with other tests by acception it's sessions and throwing exceptions.
-            // So, let's wait for timeout and a bit more to make sure all created tasks are completed
-            sw.Stop();
+                        Assert.True(eventQueue.TryDequeue(out var setStateStart));
+                        AssertSetSessionStateStart(queueName, setStateStart.eventName, setStateStart.payload, setStateStart.activity);
 
-            var timeToWait = (timeout - sw.Elapsed).TotalMilliseconds + 1000;
-            if (timeToWait > 0)
-            {
-                await Task.Delay((int)timeToWait);
-            }
+                        Assert.True(eventQueue.TryDequeue(out var setStateStop));
+                        AssertSetSessionStateStop(queueName, setStateStop.eventName, setStateStop.payload, setStateStop.activity,
+                            setStateStart.activity);
+
+                        Assert.True(eventQueue.TryDequeue(out var getStateStart));
+                        AssertGetSessionStateStart(queueName, getStateStart.eventName, getStateStart.payload, getStateStart.activity);
+
+                        Assert.True(eventQueue.TryDequeue(out var getStateStop));
+                        AssertGetSessionStateStop(queueName, getStateStop.eventName, getStateStop.payload, getStateStop.activity,
+                            getStateStop.activity);
+
+                        Assert.True(eventQueue.TryDequeue(out var setStateStart2));
+                        Assert.True(eventQueue.TryDequeue(out var setStateStop2));
+
+                        Assert.True(eventQueue.TryDequeue(out var receiveStart));
+                        AssertReceiveStart(queueName, receiveStart.eventName, receiveStart.payload, receiveStart.activity);
+
+                        Assert.True(eventQueue.TryDequeue(out var receiveStop));
+                        AssertReceiveStop(queueName, receiveStop.eventName, receiveStop.payload, receiveStop.activity, receiveStart.activity,
+                            sendStart.activity);
+
+                        Assert.True(eventQueue.IsEmpty, "There were events present when none were expected");
+                    }
+                }
+                finally
+                {
+                    await Task.WhenAll(
+                        messageSession.CloseAsync(),
+                        messageSender.CloseAsync(), 
+                        sessionClient.CloseAsync());
+                }
+            });
         }
 
-        protected override void Dispose(bool disposing)
+        [Fact]
+        [LiveTest]
+        [DisplayTestMethodName]
+        public async Task SessionHandlerFireEvents()
         {
-            if (this.disposed)
-                return;
-
-            if (disposing)
+            await ServiceBusScope.UsingQueueAsync(partitioned: false, sessionEnabled: true, async queueName =>
             {
-                this.queueClient?.SessionPumpHost?.Close();
-                this.queueClient?.SessionClient.CloseAsync().Wait(TimeSpan.FromSeconds(maxWaitSec));
-                this.queueClient?.CloseAsync().Wait(TimeSpan.FromSeconds(maxWaitSec));
-                this.messageSession?.CloseAsync().Wait(TimeSpan.FromSeconds(maxWaitSec));
-                this.sessionClient?.CloseAsync().Wait(TimeSpan.FromSeconds(maxWaitSec));
-                this.messageSender?.CloseAsync().Wait(TimeSpan.FromSeconds(maxWaitSec));
-            }
+                var timeout = TimeSpan.FromSeconds(5);
+                var eventQueue = this.CreateEventQueue();
 
-            this.disposed = true;
+                var queueClient = new QueueClient(TestUtility.NamespaceConnectionString, queueName, ReceiveMode.ReceiveAndDelete, new NoRetry())
+                {
+                    OperationTimeout = timeout
+                };
+                
+                try
+                {
+                    using (var listener = this.CreateEventListener(queueName, eventQueue))
+                    using (var subscription = this.SubscribeToEvents(listener))
+                    {
+                        queueClient.ServiceBusConnection.OperationTimeout = timeout;
+                        queueClient.SessionClient.OperationTimeout = timeout;
 
-            base.Dispose(disposing);
+                        var sw = Stopwatch.StartNew();
+                
+                        listener.Enable((name, queue, arg) => !name.Contains("AcceptMessageSession") &&
+                                                                   !name.Contains("Receive") &&
+                                                                   !name.Contains("Exception"));
+                        var sessionId = Guid.NewGuid().ToString();
+                        var message = new Message
+                        {
+                            MessageId = "messageId",
+                            SessionId = sessionId
+                        };
+                        await queueClient.SendAsync(message);
+
+                        var tcs = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
+
+                        queueClient.RegisterSessionHandler((session, msg, ct) =>
+                        {
+                            tcs.TrySetResult(0);
+                            return Task.CompletedTask;
+                        },
+                        exArgs => 
+                        {
+                            tcs.TrySetException(exArgs.Exception);
+                            return Task.CompletedTask;
+                        });
+
+                        await tcs.Task.WithTimeout(DefaultTimeout);
+
+                        Assert.True(eventQueue.TryDequeue(out var sendStart));
+                        AssertSendStart(queueName, sendStart.eventName, sendStart.payload, sendStart.activity, null);
+
+                        Assert.True(eventQueue.TryDequeue(out var sendStop));
+                        AssertSendStop(queueName, sendStop.eventName, sendStop.payload, sendStop.activity, sendStart.activity);
+
+                        Assert.True(eventQueue.TryDequeue(out var processStart));
+                        AssertProcessSessionStart(queueName, processStart.eventName, processStart.payload, processStart.activity, sendStart.activity);
+
+                        int wait = 0;
+                        while (wait++ < MaxWaitSec && eventQueue.Count < 1)
+                        {
+                            await Task.Delay(TimeSpan.FromSeconds(1));
+                        }
+
+                        Assert.True(eventQueue.TryDequeue(out var processStop));
+                        AssertProcessSessionStop(queueName, processStop.eventName, processStop.payload, processStop.activity,
+                            processStart.activity);
+
+                        Assert.True(eventQueue.IsEmpty);
+
+                        // workaround for https://github.com/Azure/azure-service-bus-dotnet/issues/372:
+                        // SessionPumpTaskAsync calls AcceptMessageSessionAsync() without cancellation token.
+                        // Even after SessionPump is stopped, this Task may still wait for session during operation timeout
+                        // It may interferee with other tests by acception it's sessions and throwing exceptions.
+                        // So, let's wait for timeout and a bit more to make sure all created tasks are completed
+                        sw.Stop();
+
+                        var timeToWait = (timeout - sw.Elapsed).TotalMilliseconds + 1000;
+                        if (timeToWait > 0)
+                        {
+                            await Task.Delay((int)timeToWait);
+                        }
+                    }
+                }
+                finally
+                {
+                    await queueClient.CloseAsync();
+                }
+            });
         }
 
-        protected void AssertAcceptMessageSessionStart(string name, object payload, Activity activity)
+        protected void AssertAcceptMessageSessionStart(string entityName, string eventName, object payload, Activity activity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.AcceptMessageSession.Start", name);
-            this.AssertCommonPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.AcceptMessageSession.Start", eventName);
+            this.AssertCommonPayloadProperties(entityName, payload);
 
             var sessionId = this.GetPropertyValueFromAnonymousTypeInstance<string>(payload, "SessionId");
             
@@ -221,10 +201,10 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
             Assert.Equal(sessionId, activity.Tags.Single(t => t.Key == "SessionId").Value);
         }
 
-        protected void AssertAcceptMessageSessionStop(string name, object payload, Activity activity, Activity acceptActivity)
+        protected void AssertAcceptMessageSessionStop(string entityName, string eventName, object payload, Activity activity, Activity acceptActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.AcceptMessageSession.Stop", name);
-            this.AssertCommonStopPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.AcceptMessageSession.Stop", eventName);
+            this.AssertCommonStopPayloadProperties(entityName, payload);
             this.GetPropertyValueFromAnonymousTypeInstance<string>(payload, "SessionId");
 
             if (acceptActivity != null)
@@ -233,10 +213,10 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
             }
         }
 
-        protected void AssertGetSessionStateStart(string name, object payload, Activity activity)
+        protected void AssertGetSessionStateStart(string entityName, string eventName, object payload, Activity activity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.GetSessionState.Start", name);
-            this.AssertCommonPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.GetSessionState.Start", eventName);
+            this.AssertCommonPayloadProperties(entityName, payload);
 
             var sessionId = this.GetPropertyValueFromAnonymousTypeInstance<string>(payload, "SessionId");
             
@@ -245,10 +225,10 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
             Assert.Equal(sessionId, activity.Tags.Single(t => t.Key == "SessionId").Value);
         }
 
-        protected void AssertGetSessionStateStop(string name, object payload, Activity activity, Activity getStateActivity)
+        protected void AssertGetSessionStateStop(string entityName, string eventName, object payload, Activity activity, Activity getStateActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.GetSessionState.Stop", name);
-            this.AssertCommonStopPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.GetSessionState.Stop", eventName);
+            this.AssertCommonStopPayloadProperties(entityName, payload);
             this.GetPropertyValueFromAnonymousTypeInstance<string>(payload, "SessionId");
             this.GetPropertyValueFromAnonymousTypeInstance<byte[]>(payload, "State");
 
@@ -258,10 +238,10 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
             }
         }
 
-        protected void AssertSetSessionStateStart(string name, object payload, Activity activity)
+        protected void AssertSetSessionStateStart(string entityName, string eventName, object payload, Activity activity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.SetSessionState.Start", name);
-            this.AssertCommonPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.SetSessionState.Start", eventName);
+            this.AssertCommonPayloadProperties(entityName, payload);
             var sessionId = this.GetPropertyValueFromAnonymousTypeInstance<string>(payload, "SessionId");
             this.GetPropertyValueFromAnonymousTypeInstance<byte[]>(payload, "State");
 
@@ -270,11 +250,11 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
             Assert.Equal(sessionId, activity.Tags.Single(t => t.Key == "SessionId").Value);
         }
 
-        protected void AssertSetSessionStateStop(string name, object payload, Activity activity, Activity setStateActivity)
+        protected void AssertSetSessionStateStop(string entityName, string eventName, object payload, Activity activity, Activity setStateActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.SetSessionState.Stop", name);
+            Assert.Equal("Microsoft.Azure.ServiceBus.SetSessionState.Stop", eventName);
 
-            this.AssertCommonStopPayloadProperties(payload);
+            this.AssertCommonStopPayloadProperties(entityName, payload);
             this.GetPropertyValueFromAnonymousTypeInstance<string>(payload, "SessionId");
             this.GetPropertyValueFromAnonymousTypeInstance<byte[]>(payload, "State");
 
@@ -284,10 +264,10 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
             }
         }
 
-        protected void AssertRenewSessionLockStart(string name, object payload, Activity activity, Activity parentActivity)
+        protected void AssertRenewSessionLockStart(string entityName, string eventName, object payload, Activity activity, Activity parentActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.RenewSessionLock.Start", name);
-            this.AssertCommonPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.RenewSessionLock.Start", eventName);
+            this.AssertCommonPayloadProperties(entityName, payload);
             var sessionId= this.GetPropertyValueFromAnonymousTypeInstance<string>(payload, "SessionId");
 
             Assert.NotNull(activity);
@@ -295,11 +275,11 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
             Assert.Equal(sessionId, activity.Tags.Single(t => t.Key == "SessionId").Value);
         }
 
-        protected void AssertRenewSessionLockStop(string name, object payload, Activity activity, Activity renewActivity)
+        protected void AssertRenewSessionLockStop(string entityName, string eventName, object payload, Activity activity, Activity renewActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.RenewSessionLock.Stop", name);
+            Assert.Equal("Microsoft.Azure.ServiceBus.RenewSessionLock.Stop", eventName);
 
-            this.AssertCommonStopPayloadProperties(payload);
+            this.AssertCommonStopPayloadProperties(entityName, payload);
             this.GetPropertyValueFromAnonymousTypeInstance<string>(payload, "SessionId");
 
             if (renewActivity != null)
@@ -308,10 +288,10 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
             }
         }
 
-        protected void AssertProcessSessionStart(string name, object payload, Activity activity, Activity sendActivity)
+        protected void AssertProcessSessionStart(string entityName, string eventName, object payload, Activity activity, Activity sendActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.ProcessSession.Start", name);
-            AssertCommonPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.ProcessSession.Start", eventName);
+            AssertCommonPayloadProperties(entityName, payload);
 
             GetPropertyValueFromAnonymousTypeInstance<IMessageSession>(payload, "Session");
             var message = GetPropertyValueFromAnonymousTypeInstance<Message>(payload, "Message");
@@ -324,10 +304,10 @@ namespace Microsoft.Azure.ServiceBus.UnitTests.Diagnostics
             AssertTags(message, activity);
         }
 
-        protected void AssertProcessSessionStop(string name, object payload, Activity activity, Activity processActivity)
+        protected void AssertProcessSessionStop(string entityName, string eventName, object payload, Activity activity, Activity processActivity)
         {
-            Assert.Equal("Microsoft.Azure.ServiceBus.ProcessSession.Stop", name);
-            AssertCommonStopPayloadProperties(payload);
+            Assert.Equal("Microsoft.Azure.ServiceBus.ProcessSession.Stop", eventName);
+            AssertCommonStopPayloadProperties(entityName, payload);
             GetPropertyValueFromAnonymousTypeInstance<IMessageSession>(payload, "Session");
             var message = GetPropertyValueFromAnonymousTypeInstance<Message>(payload, "Message");
 

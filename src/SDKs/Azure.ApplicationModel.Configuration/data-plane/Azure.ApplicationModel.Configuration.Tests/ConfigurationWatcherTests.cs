@@ -18,10 +18,7 @@ namespace Azure.ApplicationModel.Configuration.Tests
         [Test]
         public async Task Helpers()
         {
-            var connectionString = Environment.GetEnvironmentVariable("AZ_CONFIG_CONNECTION");
-            Assert.NotNull(connectionString, "Set AZ_CONFIG_CONNECTION environment variable to the connection string");
-
-            var client = new ConfigurationClient(connectionString);
+            ConfigurationClient client = TestEnvironment.GetClient();
             var source = new CancellationTokenSource();
 
             const int numberOfSettings = 2;
@@ -36,7 +33,7 @@ namespace Azure.ApplicationModel.Configuration.Tests
                 for (int i = 0; i < numberOfSettings; i++) {
                     var reponse = await client.AddAsync(new ConfigurationSetting($"{testPartition}_{i}", i.ToString()));
                     Assert.AreEqual(200, reponse.Status);
-                    addedSettings.Add(reponse.Result);
+                    addedSettings.Add(reponse.Value);
                 }
 
                 var changed = new List<SettingChangedEventArgs>(); // acumulator for detected changes
