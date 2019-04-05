@@ -20,7 +20,7 @@ steps:
       msbuildArguments: /t:RunTests /clp:ShowTimestamp /flp:Summary;Verbosity=minimal;LogFile=msbuild.sum /flp1:warningsonly;logfile=msbuild.wrn /flp2:errorsonly;logfile=msbuild.err /p:Scope="Compute" 
   - task: CopyFiles@2
     inputs:
-      contents: '**\*.trx'
+      contents: '**/*.trx'
       targetFolder: $(Build.ArtifactStagingDirectory)
   - task: PublishBuildArtifacts@1
     inputs:
