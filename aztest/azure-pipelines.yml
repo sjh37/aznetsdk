@@ -18,7 +18,11 @@ steps:
     inputs:
       solution: build.proj
       msbuildArguments: /t:RunTests /clp:ShowTimestamp /flp:Summary;Verbosity=minimal;LogFile=msbuild.sum /flp1:warningsonly;logfile=msbuild.wrn /flp2:errorsonly;logfile=msbuild.err /p:Scope="Compute" 
-  - task: PublishTestResults@2
+  - task: CopyFiles@2
     inputs:
-      testResultsFiles: '**/*.trx'
-      testRunTitle: 'Test results for NET SDK tests'
+      contents: '**\*.trx'
+      targetFolder: $(Build.ArtifactStagingDirectory)
+  - task: PublishBuildArtifacts@1
+    inputs:
+      pathtoPublish: $(Build.ArtifactStagingDirectory)
+      artifactName: TestResults
