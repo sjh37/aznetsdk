@@ -1,7 +1,7 @@
 pr:
   branches:
     include:
-    - aztest
+    - dev
 
 pool:
   vmImage: 'VS2017-Win2016'
