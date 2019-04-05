@@ -17,4 +17,4 @@ steps:
   - task: MSBuild@1
     inputs:
       solution: build.proj
-      msbuildArguments: /t:RunTests /p:Scope=Compute
+      msbuildArguments: /t:RunTests /p:Scope=SDKs\Compute
