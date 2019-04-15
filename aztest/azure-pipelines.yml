@@ -7,7 +7,7 @@ pool:
   vmImage: 'VS2017-Win2016'
 
 steps:
-  - task: PowerShell@2
+  - task: PowerShell@1
     inputs:
-      pwsh: true
-      arguments: 'Get-ChildItem env:'
+      arguments: 'env:'
+      inlineScript: 'Get-ChildItem'
