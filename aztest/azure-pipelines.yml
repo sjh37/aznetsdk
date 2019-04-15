@@ -7,21 +7,7 @@ pool:
   vmImage: 'VS2017-Win2016'
 
 steps:
-  - task: CmdLine@1
+  - task: PowerShell@2
     inputs:
-      filename: C:\Program Files (x86)\Microsoft SDKs\Windows\v10.0A\bin\NETFX 4.6.2 Tools\sn.exe
-      arguments: -Vr *,31bf3856ad364e35
-  - task: MSBuild@1
-    inputs:
-      solution: build.proj
-  - task: MSBuild@1
-    inputs:
-      solution: build.proj
-      msbuildArguments: /t:RunTests /clp:ShowTimestamp /flp:Summary;Verbosity=minimal;LogFile=msbuild.sum /flp1:warningsonly;logfile=msbuild.wrn /flp2:errorsonly;logfile=msbuild.err /p:Scope=SDKs\Compute
-  - task: PublishTestResults@2
-    condition: succeededOrFailed()
-    inputs:
-      testRunTitle: '$(TargetFramework)'
-      testResultsFiles: '**/*.trx'
-      testResultsFormat: 'VSTest'
-      mergeTestResults: true
+      script: Get-ChildItem
+      arguments: 'env:'
