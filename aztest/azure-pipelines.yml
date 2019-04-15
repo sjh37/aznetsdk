@@ -21,7 +21,7 @@ steps:
   - task: PublishTestResults@2
     condition: succeededOrFailed()
     inputs:
-      testRunTitle: 'Test Results for PR# $(SYSTEM_PULLREQUEST_PULLREQUESTNUMBER)'
+      testRunTitle: 'Test Results for PR# $(System.PullRequest.PullRequestNumber)'
       testResultsFiles: '**/*.trx'
       testResultsFormat: 'VSTest'
       mergeTestResults: true
