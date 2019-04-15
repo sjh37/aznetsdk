@@ -9,5 +9,5 @@ pool:
 steps:
   - task: PowerShell@2
     inputs:
-      script: Get-ChildItem
-      arguments: 'env:'
+      pwsh: true
+      arguments: 'Get-ChildItem env:'
