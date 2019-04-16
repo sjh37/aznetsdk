@@ -30,4 +30,4 @@ steps:
       testResultsFiles: '**/*.trx'
       testRunTitle: 'Test Results for PR# $(SYSTEM_PULLREQUEST_PULLREQUESTNUMBER)'
       testResultsFormat: 'VSTest'
-      mergeTestResults: true
+      mergeTestResults: false
