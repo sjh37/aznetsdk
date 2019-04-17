@@ -33,7 +33,7 @@ jobs:
 
   - job: LinuxNetStandard
     pool:
-      vmImage: 'VS2017-Win2016'
+      vmImage: 'Linux'
 
     steps:
         - task: DotNetCoreInstaller@0
