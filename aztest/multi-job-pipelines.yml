@@ -40,5 +40,5 @@ jobs:
           displayName: 'Use .NET Core sdk $(DotNetCoreVersion)'
           inputs:
             version: '$(DotNetCoreVersion)'
-        - script: 'dotnet msbuild src/SDKs/Compute/Compute.sln'
-          displayName: 'Build Net Core assets' 
+        - script: './tools/linuxScripts/runNetCoreSdkTests.sh'
+          displayName: 'Build and test on Non-windows machine' 
