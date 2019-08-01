@@ -29,7 +29,7 @@ namespace Microsoft.Azure.KeyVault.WebKey.Tests
         {
             RSA rsa = RSA.Create();
 
-            var keyOriginal  = new JsonWebKey(rsa.ExportParameters(true));
+            var keyOriginal  = new JsonWebKey(rsa.ExportParameters(false));
             var keyRecovered = JsonConvert.DeserializeObject<JsonWebKey>(keyOriginal.ToString());
 
             Assert.Equal(keyOriginal, keyRecovered);
